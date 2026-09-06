@@ -1,306 +1,277 @@
 # Codex Harness Free Model Router
 
-Use the Codex harness with free models when the normal Codex quota is low or
-empty. Switch back to paid GPT models when you want them.
+A user-configured local panel and skill for switching a Codex harness between
+free and paid model routes.
 
-This repository packages the existing local Codex model switcher, its fallback
-skill, its daemon helpers, and the local website. The website keeps the same
-dark Codex-style layout shown in the screenshots.
+The package starts with no provider presets and no model presets. It does not
+assume which services, models, API keys, limits, or paid routes you use. Add
+your own values before you run a model.
 
-## Why use it
+Everything is customizable.
 
-The router gives you one simple control point for two lanes:
+## What this package does
 
-| Lane | What it does | Usage source |
+| Area | User-controlled behavior |
+| --- | --- |
+| Providers | Add any provider with an OpenAI-compatible endpoint. |
+| Models | Add every model ID and friendly name yourself. |
+| Lanes | Mark each model as `free` or `paid`. |
+| Fallback | Set the Default Fallback Rules for your own usage limits. |
+| Credentials | Enter a key for one run or name an approved environment variable. |
+| Codex route | Write a local profile that points the harness to your selected route. |
+| Local website | Change the panel port, daemon port, profile name, and other settings. |
+
+The package does not choose a provider for you. It does not choose a model for
+you. It does not store an API key in the repository.
+
+## Screenshots are examples only
+
+These screenshots show the visual style of the panel. The names and values in
+the screenshots are examples from one setup. They are not built-in presets and
+are not required for your setup.
+
+### Example free fallback lane
+
+![Example free fallback lane](docs/screenshots/model-switcher-free.png)
+
+### Example paid lane
+
+![Example paid lane](docs/screenshots/model-switcher-paid.png)
+
+### Example model menu
+
+![Example model menu](docs/screenshots/model-switcher-model-menu.png)
+
+### Example switch confirmation
+
+![Example switch confirmation](docs/screenshots/model-switcher-confirmation.png)
+
+## How the route works
+
+```text
+Codex task
+    -> usage check
+    -> Default Fallback Rules
+    -> local daemon or direct provider route
+    -> your configured model
+```
+
+When the free route is active, the daemon sends the request to your configured
+outside provider. The normal Codex model does not receive that request. The
+router reports `uses_codex_quota=false` only after the selected route passes a
+health or request check.
+
+If Codex cannot start, the direct runner can call a configured model without
+Codex. That route may not provide the full Codex tool surface.
+
+## Default Fallback Rules
+
+The package provides generic starting values. You can change every value.
+
+| Rule | Starting value | Meaning |
+| --- | ---: | --- |
+| Five-hour remaining threshold | 5% | A five-hour fallback may start at or below this value. |
+| Weekly remaining threshold | 10% | A weekly safety stop starts at or below this value. |
+| Five-hour weekly gate | 25% | The five-hour rule needs weekly remaining usage below this value. |
+| Weekly stop | On | A current explicit user override is required to continue below the weekly threshold. |
+| Free-only mode | On | Prevents an unreviewed paid route from the fallback lane. |
+
+The default five-hour rule needs five-hour remaining usage at or below 5% and
+weekly remaining usage below 25% and above 10%.
+
+The default weekly rule stops at 10% or less. A user can explicitly override
+that stop for the current task. The skill must not reuse an old override.
+
+Missing or unclear usage data stops the route with `usage_unknown`.
+
+## Start the local website
+
+The website runs on your computer. It binds to `127.0.0.1` by default.
+
+```bash
+cd skill
+./scripts/start_free_model_router_panel.sh
+```
+
+Open the printed local address in the Codex built-in browser or in another
+browser. The panel starts empty. Add a provider and at least one model before
+you select a route.
+
+The panel lets you:
+
+1. Add a provider name, provider ID, base URL, key variable name, and API style.
+2. Add model IDs, friendly names, provider links, and free or paid lanes.
+3. Enter a key for the current run after a confirmation step.
+4. Scan only configured key variable names after a confirmation step.
+5. Change the Default Fallback Rules.
+6. Switch the active model and write a Codex profile.
+
+The panel never scans the environment on page load. It never displays a key.
+
+## Add a provider and model
+
+You can enter values in the panel or create a private JSON file from
+[`skill/config.example.json`](skill/config.example.json).
+
+Each provider needs:
+
+- a lowercase provider ID;
+- a display name;
+- an `http` or `https` base URL;
+- an optional uppercase environment variable name for its key; and
+- `responses` or `chat` as its API style.
+
+Each model needs:
+
+- the exact model ID expected by the provider;
+- a friendly display name;
+- the provider ID; and
+- either the `free` or `paid` lane.
+
+The package validates these values. It does not guess them.
+
+## Start the free model router daemon
+
+After you configure a free provider and model, start the daemon:
+
+```bash
+cd skill
+./scripts/start_free_model_router_daemon.sh
+```
+
+The daemon reads the active provider and model from your private configuration.
+It exposes a local OpenAI-compatible endpoint for the Codex profile. It binds
+to `127.0.0.1` and does not print request bodies or authorization headers.
+
+To select values from the command line, set these environment variables before
+starting it:
+
+```text
+MODEL_ROUTER_CONFIG
+MODEL_ROUTER_PROVIDER_ID
+MODEL_ROUTER_MODEL_ID
+MODEL_ROUTER_DAEMON_PORT
+```
+
+Do not put a key in any of these variables. The key belongs in the provider key
+environment variable that you configured.
+
+## Switch the Codex harness
+
+Select a configured model in the panel, confirm the switch, and start a new
+Codex process with the generated profile name:
+
+```bash
+codex exec --profile free-model-router "your task"
+```
+
+The profile contains the model ID and endpoint settings. It does not contain a
+key. A profile on disk is not proof that Codex loaded it. Check the daemon
+health and the new process before relying on the route.
+
+The command-line helper is also available:
+
+```bash
+cd skill
+./scripts/select_router_model.sh <configured-model-id>
+```
+
+Paid models use the provider route that you configured. Free models use the
+local daemon. Everything remains customizable.
+
+## Run without Codex
+
+Use the direct runner when Codex cannot start or has no usable quota:
+
+```bash
+cd skill
+./scripts/run_external_model.py \
+  --base-url <provider-base-url> \
+  --model-id <configured-model-id> \
+  --api-key-env <configured-key-variable> \
+  "your task"
+```
+
+The runner does not call Codex. It supports a configured Responses API or Chat
+Completions API. Tool and document support depends on the provider and model.
+
+## Customization reference
+
+| Setting | Starting value | Customization |
 | --- | --- | --- |
-| Free fallback | Sends work through the local daemon to an approved free provider. | Outside provider quota |
-| GPT (paid) | Restores the normal Codex model and provider. | Codex or provider quota |
+| Configuration file | `~/.config/free-model-router/config.json` | Set `MODEL_ROUTER_CONFIG`. |
+| Panel port | `8791` | Set `MODEL_ROUTER_PANEL_PORT`. |
+| Daemon port | `4242` | Set `MODEL_ROUTER_DAEMON_PORT` or edit the config. |
+| Profile name | `free-model-router` | Edit `app.profile_name`. |
+| Provider order | Empty | Edit `fallback.provider_order`. |
+| Model order | Empty | Edit `fallback.model_order`. |
+| Default Fallback Rules | 5%, 10%, 25% | Edit the `fallback` values. |
+| Free-only safety | On | Change only after reviewing the route. |
 
-The free lane is useful when you want to keep working after Codex usage is
-exhausted. The Codex harness can still provide its normal local work surface,
-skills, files, and tools when the selected free route supports them. A direct
-standalone run is also available when Codex cannot start.
+The model catalog is intentionally empty. Add models in the panel or in your
+private configuration. Do not copy another user's catalog without checking the
+model IDs, pricing, limits, tool support, and document support.
 
-The router does not claim that a switch worked because a file changed. It
-checks the daemon or a real request before it reports a free route as active.
+## Credentials and approval
 
-## Screenshots
+The skill tells the agent to ask before it scans for keys. A user can also enter
+a key in the panel for one run. The key remains in process memory and is not
+written to the configuration file.
 
-These images show the packaged website and its main controls.
+Use a provider-supported credential store or a private environment variable for
+longer use. Never put a key in this repository, a screenshot, a prompt, a log,
+or a GitHub issue.
 
-### Free fallback lane
-
-The free lane shows the daemon state, the active model, and the availability of
-each approved free model.
-
-![Free fallback lane](docs/screenshots/model-switcher-free.png)
-
-### Paid GPT lane
-
-The paid lane lists the GPT models that can be restored when Codex usage is
-available.
-
-![Paid GPT lane](docs/screenshots/model-switcher-paid.png)
-
-### Model menu
-
-The Codex model menu shows the friendly model names used by the daemon.
-
-![Model menu](docs/screenshots/model-switcher-model-menu.png)
-
-### Switch confirmation
-
-The switch confirmation makes the restart and quota impact clear before the
-change is applied.
-
-![Switch confirmation](docs/screenshots/model-switcher-confirmation.png)
-
-## Included files
+## File layout
 
 | Path | Purpose |
 | --- | --- |
-| `skill/SKILL.md` | The reusable fallback skill. |
-| `skill/openai.yaml` | Skill display information and automatic discovery settings. |
-| `skill/scripts/codex_muse_daemon.py` | Local Codex Responses bridge for the approved OpenCode free models. |
-| `skill/web/model_switcher_server.py` | The local host website. |
-| `skill/scripts/decide_fallback.py` | The threshold decision helper. |
-| `skill/scripts/start_codex_muse_daemon.sh` | Starts or restarts the free daemon. |
-| `skill/scripts/start_model_switcher.sh` | Starts or stops the local website. |
-| `skill/scripts/switch_model.sh` | Switches the default free model. |
-| `skill/scripts/enable_fallback.sh` | Enables the free daemon route. |
-| `skill/scripts/disable_fallback.sh` | Restores the paid route. |
-| `docs/screenshots/` | Website showcase images. |
-
-## Approved free models
-
-Use the friendly name in conversation. Use the model ID in a command or
-configuration file.
-
-| Provider | Friendly name | Model ID | Role |
-| --- | --- | --- | --- |
-| OpenCode Zen | Muse Spark 1.3 | `muse-spark-1.3-contributor-free` | Default daemon model |
-| OpenCode Zen | MiMo V2.5 | `mimo-v2.5-free` | Free daemon choice |
-| OpenCode Zen | DeepSeek V4 Flash | `deepseek-v4-flash-free` | Free daemon choice |
-| OpenCode Zen | Nemotron 3 Ultra | `nemotron-3-ultra-free` | Free daemon choice |
-| OpenCode Zen | Muse Spark 1.2 | `muse-spark-1.2-contributor-free` | Free daemon choice |
-| OpenRouter | MiniMax M3 Free | `minimax/minimax-m3:free` | Text-only last fallback |
-| OmniRoute | Auto Best Coding | `auto-best-coding` | Optional local route |
-
-Free model availability can change at the provider. The website records the
-last real result and shows rate-limited models as unavailable.
-
-OmniRoute is not used automatically in free-only mode. Its automatic route can
-select a paid model. Enable it only when you accept that behavior or have
-configured OmniRoute to use free models only.
-
-## Fallback rules
-
-The skill checks the read-only Codex usage data before it sends new work.
-
-### Five-hour fallback
-
-The five-hour fallback starts when both conditions are true:
-
-1. Five-hour remaining usage is 5% or less.
-2. Weekly remaining usage is below 25% and above 10%.
-
-This rule does not need a manual override.
-
-### Weekly fallback
-
-Weekly remaining usage at 10% or less is a safety stop by default. The skill
-does not call a free provider at that point.
-
-An explicit request in the current task can override that stop. Examples are:
-
-- `Run the fallback for real.`
-- `Override the weekly stop for this task.`
-- `Switch to Muse Spark 1.2 now.`
-
-The override applies to the current task only. The skill does not reuse an old
-override in a later task.
-
-### Unknown usage
-
-If a required usage value is missing or unclear, the skill stops with
-`usage_unknown`. It does not guess.
-
-## Route order
-
-When a fallback is eligible, the skill uses this order:
-
-1. Native Codex daemon profile using the selected OpenCode free model.
-2. Direct OpenCode free runner if the daemon cannot start.
-3. Another approved OpenCode free model if the first model is unavailable.
-4. OpenRouter MiniMax M3 Free as a text-only last fallback.
-
-OmniRoute is excluded from this automatic free-only order unless the user
-enables it.
-
-## Install and start
-
-The repository is standard-library Python plus shell scripts. It does not need
-a database or a JavaScript package install.
-
-Run the website from the `skill` directory:
-
-```bash
-cd skill
-./scripts/start_model_switcher.sh
-```
-
-Open `http://127.0.0.1:8791` in the Codex built-in browser or another browser.
-Use `MODEL_SWITCHER_PORT` when port 8791 is already in use.
-
-Start the free daemon in another terminal:
-
-```bash
-cd skill
-./scripts/start_codex_muse_daemon.sh
-```
-
-The daemon uses `127.0.0.1:4242` by default. Use
-`CODEX_DAEMON_PORT` when another local service uses that port.
-
-## Switch models
-
-You can switch from the website or the command line.
-
-From the website:
-
-1. Open the Free fallback lane.
-2. Select a model with `Switch`.
-3. Confirm the change.
-4. Start a new Codex chat after the restart.
-
-From the command line:
-
-```bash
-cd skill
-./scripts/switch_model.sh "Muse Spark 1.2"
-```
-
-To enable the free lane:
-
-```bash
-cd skill
-./scripts/enable_fallback.sh
-```
-
-To restore the paid lane:
-
-```bash
-cd skill
-./scripts/disable_fallback.sh
-```
-
-Existing chats can keep a pinned model. The included thread-model helper takes
-a backup before it folds GPT chats into the free lane, then restores them when
-the paid lane returns.
-
-## Provider credentials
-
-This repository contains no keys. The website also does not display keys.
-Configure a provider through its supported credential method before starting
-the daemon or runner.
-
-| Provider | Credential input used by the included scripts |
-| --- | --- |
-| OpenCode Zen | OpenCode's supported auth file, or `OPENCODE_AUTH_FILE`. |
-| OpenRouter | `OPENROUTER_API_KEY`. |
-| OmniRoute | `OMNIROUTE_ENV_FILE` with the local OmniRoute key entry. |
-| Other OpenAI-compatible providers | Add a provider block and a token helper that returns one key only. |
-
-If an agent offers to scan for keys, require a current user approval first. The
-agent must not print, save, commit, or send a key. Keep provider credentials in
-the provider's credential store or environment, not in this repository.
-
-## Direct use without Codex
-
-When Codex cannot start or has no usable quota, run the standalone fallback
-runner:
-
-```bash
-cd skill
-./scripts/run_free_fallback.sh opencode muse-spark-1.3-contributor-free "your task"
-```
-
-For OpenRouter:
-
-```bash
-cd skill
-./scripts/run_free_fallback.sh openrouter minimax/minimax-m3:free "your task"
-```
-
-This path does not call Codex. It is text-oriented and does not provide the
-full Codex tool surface. Use daemon mode when you need the Codex harness.
-
-## Customization
-
-The package is intended to be customized. Review the model list and provider
-settings before relying on it.
-
-| Setting | Default | How to customize |
-| --- | --- | --- |
-| Codex home | `~/.codex` | Set `CODEX_HOME`. |
-| Website port | `8791` | Set `MODEL_SWITCHER_PORT`. |
-| Daemon port | `4242` | Set `CODEX_DAEMON_PORT`. |
-| Daemon host | `127.0.0.1` | Keep it on loopback unless you add a separate access-control design. |
-| Website log | `/tmp/codex-model-switcher.log` | Set `MODEL_SWITCHER_LOG`. |
-| OpenCode auth file | OpenCode default | Set `OPENCODE_AUTH_FILE`. |
-| OmniRoute env file | `~/.omniroute/.env` | Set `OMNIROUTE_ENV_FILE`. |
-| Codex app process | `ChatGPT.app/Contents/MacOS/ChatGPT` | Set `CODEX_APP_PROCESS`. |
-| Codex app name | `ChatGPT` | Set `CODEX_APP_NAME`. |
-| Codex app bundle | `com.openai.codex` | Set `CODEX_APP_BUNDLE`. |
-
-When you change the model catalog, keep the model IDs in sync in:
-
-- `skill/scripts/codex_muse_daemon.py`
-- `skill/scripts/decide_fallback.py`
-- `skill/scripts/run_free_fallback.sh`
-- `skill/web/model_switcher_server.py`
-
-Restart the daemon after a catalog or default-model change.
+| `skill/SKILL.md` | The user-focused skill. |
+| `skill/config.example.json` | Empty configuration example with customizable rules. |
+| `skill/scripts/router_config.py` | Configuration loading and validation. |
+| `skill/scripts/decide_default_fallback.py` | Default Fallback Rules decision helper. |
+| `skill/scripts/free_model_router_daemon.py` | Generic local daemon. |
+| `skill/scripts/free_model_router_panel.py` | Generic local website server. |
+| `skill/scripts/start_free_model_router_daemon.sh` | Start the daemon. |
+| `skill/scripts/start_free_model_router_panel.sh` | Start the website. |
+| `skill/scripts/write_harness_profile.py` | Write a profile without a key. |
+| `skill/scripts/run_external_model.py` | Run a configured model without Codex. |
+| `docs/screenshots/` | Illustrative UI examples only. |
 
 ## Troubleshooting
 
-### The website says the daemon is offline
+### No model appears
 
-Start the daemon first. Check:
+The model catalog is empty by design. Add a provider and model in the panel.
 
-```bash
-curl http://127.0.0.1:4242/health
-```
+### The daemon says that a provider or model is not configured
 
-### A free model is rate limited
+Check `MODEL_ROUTER_CONFIG`, the provider ID, the model ID, and the active
+configuration fields. The daemon does not use hidden presets.
 
-The provider rejected the request. Choose a model marked `available`, or wait
-for the provider limit to reset.
+### A route is rejected
 
-### The app did not restart
+Check the provider URL, API style, key environment name, model ID, and provider
+limit. The router does not replace invalid values with a different provider or
+model.
 
-Set `CODEX_APP_NAME`, `CODEX_APP_BUNDLE`, or `CODEX_APP_PROCESS` for the local
-Codex installation. You can also quit and reopen the app, then start a new
-chat.
+### The weekly stop blocks the task
 
-### The new chat still uses the old model
+Use a current explicit user override only when you accept the remaining usage
+risk. Change the Default Fallback Rules if your policy is different.
 
-Codex can keep a model on an existing chat. Start a new chat, or run the
-included thread-model helper while the app is closed.
+### A paid model appears in the free lane
 
-### OpenRouter cannot use tools
-
-The OpenRouter fallback is text-only in this package. Use the OpenCode daemon
-for the Codex tool workflow.
+Check the model lane and keep free-only mode on until the route is reviewed.
 
 ## Safety and privacy
 
+- No provider or model presets are included.
 - The local website and daemon bind to loopback by default.
-- The public files contain no API keys, cookies, private prompts, account IDs,
-  usernames, or machine-specific paths.
-- Key scans require current approval.
-- The router fails closed when usage data is unknown.
-- The router does not reset usage or purchase credits.
-- Check the real daemon or request result before treating a route as active.
+- API keys are not stored in the public repository.
+- Environment scans require current approval.
+- The router fails closed on unclear usage data.
+- The router does not reset limits or purchase credits.
+- Verify live daemon or request state before claiming a route is active.
 
 Read [`SECURITY.md`](SECURITY.md) before using live credentials.

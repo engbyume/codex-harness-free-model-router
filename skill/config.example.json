@@ -1,0 +1,21 @@
+{
+  "providers": [],
+  "models": [],
+  "fallback": {
+    "five_hour_remaining_max": 5,
+    "five_hour_weekly_gate_max": 25,
+    "weekly_remaining_max": 10,
+    "weekly_stop_enabled": true,
+    "free_only": true,
+    "provider_order": [],
+    "model_order": []
+  },
+  "app": {
+    "panel_port": 8791,
+    "daemon_port": 4242,
+    "profile_name": "free-model-router",
+    "active_provider_id": "",
+    "active_model_id": "",
+    "active_lane": "free"
+  }
+}

@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Free Model Router</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <h1>Free Model Router</h1>
+      <p class="sub">Configure your providers and models. Nothing is preselected. Everything is customizable.</p>
+    </header>
+
+    <section class="lanes" aria-label="Model lane">
+      <button class="lane active" data-lane="free">
+        <strong>Free fallback</strong>
+        <small>Your configured free models through the local daemon</small>
+      </button>
+      <button class="lane" data-lane="paid">
+        <strong>Paid models</strong>
+        <small>Your configured paid models through their provider</small>
+      </button>
+    </section>
+
+    <section class="statusbar" id="statusbar" aria-live="polite"></section>
+
+    <section class="model-panel">
+      <div class="panel-heading">
+        <div>
+          <h2 id="model-heading">Free models</h2>
+          <p id="model-caption">Add the models that you want to use. The list starts empty.</p>
+        </div>
+        <button class="button quiet" id="refresh">Refresh</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Model</th><th>Provider</th><th>Route</th><th>Status</th><th></th></tr></thead>
+          <tbody id="model-rows"><tr><td colspan="5">Loading models...</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="setup-grid">
+      <details class="card" open>
+        <summary>Provider setup</summary>
+        <p class="help">Add any provider with an OpenAI-compatible endpoint. Keys stay in memory for this run.</p>
+        <div class="two-col">
+          <label>Provider ID<input id="provider-id" maxlength="64" placeholder="provider-id"></label>
+          <label>Provider name<input id="provider-name" maxlength="100" placeholder="Provider name"></label>
+        </div>
+        <label>Base URL<input id="provider-url" inputmode="url" placeholder="https://provider.example/v1"></label>
+        <div class="two-col">
+          <label>Key environment name<input id="provider-key-env" maxlength="64" placeholder="PROVIDER_API_KEY"></label>
+          <label>API style<select id="provider-wire"><option value="responses">Responses</option><option value="chat">Chat completions</option></select></label>
+        </div>
+        <div class="button-row">
+          <button class="button primary" id="add-provider">Add provider</button>
+          <button class="button quiet" id="scan-env">Scan after approval</button>
+        </div>
+        <label>Connect a key for this run<select id="key-provider"></select></label>
+        <input id="provider-key" type="password" autocomplete="off" placeholder="Enter a key only after you approve">
+        <button class="button quiet" id="connect-key">Connect key</button>
+        <div id="provider-status" class="small-status"></div>
+      </details>
+
+      <details class="card">
+        <summary>Model setup</summary>
+        <p class="help">Add free or paid models. Friendly names are for the panel. IDs go to the provider.</p>
+        <div class="two-col">
+          <label>Model ID<input id="model-id" maxlength="200" placeholder="provider-model-id"></label>
+          <label>Model name<input id="model-name" maxlength="100" placeholder="Model name"></label>
+        </div>
+        <div class="two-col">
+          <label>Provider<select id="model-provider"></select></label>
+          <label>Lane<select id="model-lane"><option value="free">Free fallback</option><option value="paid">Paid</option></select></label>
+        </div>
+        <label>Notes<input id="model-notes" maxlength="300" placeholder="Optional note"></label>
+        <button class="button primary" id="add-model">Add model</button>
+      </details>
+
+      <details class="card">
+        <summary>Default Fallback Rules</summary>
+        <p class="help">These are starting values only. Change them to match your limits and risk.</p>
+        <div class="two-col">
+          <label>Five-hour remaining at or below (%)<input id="five-hour-rule" type="number" min="0" max="100" step="1"></label>
+          <label>Weekly remaining at or below (%)<input id="weekly-rule" type="number" min="0" max="100" step="1"></label>
+          <label>Five-hour rule weekly gate (%)<input id="weekly-gate-rule" type="number" min="0" max="100" step="1"></label>
+          <label>Daemon port<input id="daemon-port" type="number" min="1024" max="65535" step="1"></label>
+        </div>
+        <label class="check"><input id="weekly-stop" type="checkbox"> Stop at the weekly limit unless I explicitly override it</label>
+        <label class="check"><input id="free-only" type="checkbox"> Free-only mode</label>
+        <label>Codex profile name<input id="profile-name" maxlength="64" placeholder="free-model-router"></label>
+        <button class="button primary" id="save-rules">Save rules</button>
+      </details>
+
+      <details class="card">
+        <summary>Usage preview</summary>
+        <p class="help">The skill reads live usage. These fields only preview your configured default rules.</p>
+        <div class="two-col">
+          <label>Five-hour remaining (%)<input id="usage-five" type="number" min="0" max="100" step="1"></label>
+          <label>Weekly remaining (%)<input id="usage-weekly" type="number" min="0" max="100" step="1"></label>
+        </div>
+        <label class="check"><input id="weekly-override" type="checkbox"> Explicitly override the weekly stop for this task</label>
+        <button class="button quiet" id="preview">Preview route</button>
+        <pre id="decision" class="decision"></pre>
+      </details>
+    </section>
+
+    <section class="notice">
+      <strong>No presets.</strong> The repository does not choose a provider, model, API key, or paid route for you. Add the values that fit your own setup.
+    </section>
+    <div id="banner" class="banner" aria-live="polite"></div>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
