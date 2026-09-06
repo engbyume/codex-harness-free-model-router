@@ -1,0 +1,7 @@
+interface:
+  display_name: "Codex Usage Fallback Router"
+  short_description: "Guard Codex usage fallbacks"
+  default_prompt: "Use $codex-usage-fallback-router before this task and when the task changes."
+
+policy:
+  allow_implicit_invocation: true
