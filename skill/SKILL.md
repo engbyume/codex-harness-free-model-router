@@ -61,10 +61,11 @@ permission. An older override does not apply to a new task.
 When a fallback is required:
 
 1. Confirm that the user configured at least one enabled `free` model.
-2. Start `scripts/start_free_model_router_daemon.sh`.
-3. Write a profile with `scripts/write_harness_profile.py` or use the panel.
-4. Verify the local daemon health endpoint.
-5. Start a new Codex process with the generated profile.
+2. Check model availability (below). Do not route onto a rate-limited model.
+3. Start `scripts/start_free_model_router_daemon.sh`.
+4. Write a profile with `scripts/write_harness_profile.py` or use the panel.
+5. Verify the local daemon health endpoint.
+6. Start a new Codex process with the generated profile.
 
 The free profile points Codex to the local daemon. The daemon forwards the
 request to the user's configured provider and model. The normal Codex model
@@ -72,6 +73,41 @@ must not receive the task.
 
 Report `uses_codex_quota=false` only after the route passes a health or request
 check. A profile on disk is not proof that Codex loaded it.
+
+## Check availability
+
+A configured model can still be unusable. A `429 Too Many Requests` answer
+means the provider's usage window for that model is spent. Do not report such
+a model as available and do not route onto it.
+
+Read the daemon's recorded outcomes before switching or routing:
+
+```bash
+curl http://127.0.0.1:4242/v1/status
+```
+
+For a live check, use the panel's **Check availability** button or send one
+probe:
+
+```bash
+curl "http://127.0.0.1:4242/v1/status?probe=1"
+```
+
+The daemon sends one tiny request (32 output tokens) and records the result.
+Probes are throttled to one per model every 2 minutes. Respect that throttle;
+do not loop probes against the provider.
+
+Status meanings:
+
+- `ok`: the model answered.
+- `rate_limited`: the provider answered 429. The model is not available now.
+- `error`: the provider answered with another failure.
+- `unknown`: a request-shape or credential problem, which does not prove the
+  model is down.
+
+When the active free model is rate limited, say so plainly and help the user
+add or select a different configured free model on a separate quota. Never
+present a fallback as working when its only model is rate limited.
 
 ## Use the route without Codex
 

@@ -51,6 +51,19 @@ def config_path() -> Path:
     return Path.home() / ".config" / "free-model-router" / "config.json"
 
 
+def status_path() -> Path:
+    """Where the daemon records model availability outcomes.
+
+    The file lives next to the configuration file by default, so both the
+    daemon and the panel resolve the same location for any configuration.
+    Set MODEL_ROUTER_STATUS_PATH to move it.
+    """
+    configured = os.environ.get("MODEL_ROUTER_STATUS_PATH")
+    if configured:
+        return Path(configured).expanduser()
+    return config_path().with_name("status.json")
+
+
 def _copy_known(raw: dict) -> dict:
     config = default_config()
     if not isinstance(raw, dict):

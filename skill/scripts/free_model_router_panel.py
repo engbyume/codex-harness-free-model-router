@@ -8,7 +8,9 @@ import json
 import os
 import sys
 import threading
+import urllib.error
 import urllib.parse
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -23,6 +25,7 @@ from router_config import (  # noqa: E402
     profile_path,
     provider_for,
     save_config,
+    status_path,
     validate_config,
 )
 from write_harness_profile import profile_text  # noqa: E402
@@ -44,6 +47,21 @@ def config_file() -> Path:
     if configured:
         return Path(configured).expanduser()
     return Path.home() / ".config" / "free-model-router" / "config.json"
+
+
+def read_status_file() -> dict:
+    """Availability outcomes that the daemon recorded, keyed by model ID."""
+    try:
+        data = json.loads(status_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    entries = data.get("models") if isinstance(data, dict) else None
+    return entries if isinstance(entries, dict) else {}
+
+
+def daemon_probe_url(config: dict) -> str:
+    port = config["app"]["daemon_port"]
+    return f"http://{HOST}:{port}/v1/status?probe=1"
 
 
 class AppState:
@@ -73,12 +91,20 @@ class AppState:
             entry["connected"] = connected
             entry["key_source"] = source
             providers.append(entry)
+        statuses = read_status_file()
         models = []
         for item in self.config["models"]:
             entry = dict(item)
             source_provider = provider_for(self.config, item["provider_id"])
             entry["provider_name"] = source_provider["name"] if source_provider else item["provider_id"]
             entry["provider_connected"] = self.connected(item["provider_id"])[0]
+            if item["lane"] == "free" and item["id"] in statuses:
+                outcome = statuses[item["id"]]
+                entry["availability"] = {
+                    "status": outcome.get("status", "unknown"),
+                    "source": outcome.get("source"),
+                    "at": outcome.get("at"),
+                }
             models.append(entry)
         active_model = self.config["app"].get("active_model_id", "")
         active_lane = self.config["app"].get("active_lane", "free")
@@ -244,6 +270,21 @@ class Handler(BaseHTTPRequestHandler):
             with STATE.lock:
                 STATE.config = save_config(clean, STATE.path)
             return {"ok": True, "state": STATE.payload()}
+
+        if path == "/api/check":
+            # Ask the local daemon to live-probe its model. The daemon holds
+            # the provider key, so the panel never touches it. When the daemon
+            # is not running, say so instead of reporting the model as broken.
+            with STATE.lock:
+                url = daemon_probe_url(STATE.config)
+            try:
+                with urllib.request.urlopen(url, timeout=60) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+            except (urllib.error.URLError, OSError, ValueError) as error:
+                raise ValueError(f"the daemon did not answer: {error}") from error
+            if not isinstance(result, dict) or not isinstance(result.get("models"), dict):
+                raise ValueError("the daemon returned an unexpected status response")
+            return {"ok": True, "models": result["models"]}
 
         if path == "/api/decision":
             with STATE.lock:

@@ -1,7 +1,26 @@
 let state = null;
-let lane = "free";
+let lane = null;
 
 const $ = (id) => document.getElementById(id);
+
+const AVAILABILITY_LABELS = {
+  ok: "available",
+  rate_limited: "rate limited (429)",
+  error: "error",
+  unknown: "unknown",
+};
+
+function availabilityFor(item) {
+  if (item.lane !== "free") return null;
+  return item.availability ? AVAILABILITY_LABELS[item.availability.status] || "unknown" : "not checked";
+}
+
+function availabilityKind(item) {
+  const status = item.availability ? item.availability.status : null;
+  if (status === "ok") return "avail-ok";
+  if (status === "rate_limited" || status === "error") return "avail-bad";
+  return "avail-unknown";
+}
 
 async function api(path, options = {}) {
   const response = await fetch(path, options);
@@ -39,12 +58,16 @@ function renderStatus() {
   const active = activeModel();
   const currentText = active ? active.name : "no model configured";
   const currentLane = active ? active.lane : lane;
-  $("statusbar").replaceChildren(
+  const pills = [
     pill("local panel: ready", "ok"),
     pill(`current: ${currentText} (${currentLane})`, "accent"),
     pill(state.fallback.free_only ? "free-only: on" : "free-only: off", state.fallback.free_only ? "ok" : "bad"),
-    pill("all settings customizable", "accent"),
-  );
+  ];
+  if (active && active.lane === "free" && active.availability) {
+    pills.push(pill(`availability: ${availabilityFor(active)}`, availabilityKind(active) === "avail-ok" ? "ok" : availabilityKind(active) === "avail-bad" ? "bad" : "accent"));
+  }
+  pills.push(pill("all settings customizable", "accent"));
+  $("statusbar").replaceChildren(...pills);
 }
 
 function renderLanes() {
@@ -62,7 +85,7 @@ function renderModels() {
   if (!items.length) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 5;
+    cell.colSpan = 6;
     cell.textContent = "No models configured. Add a provider and model below.";
     row.append(cell);
     rows.append(row);
@@ -87,14 +110,26 @@ function renderModels() {
     const provider = providerById(item.provider_id);
     statusCell.className = provider.connected ? "status-ready" : "status-warn";
     statusCell.textContent = provider.connected ? "key ready" : "needs key";
+    const availabilityCell = document.createElement("td");
+    const availability = availabilityFor(item);
+    if (availability === null) {
+      availabilityCell.className = "status-off";
+      availabilityCell.textContent = "provider route";
+    } else {
+      availabilityCell.className = availabilityKind(item);
+      availabilityCell.textContent = availability;
+      availabilityCell.title = item.availability && item.availability.source === "request" ? "From the latest request through the daemon" : "From the latest availability check";
+    }
     const actionCell = document.createElement("td");
     const button = document.createElement("button");
     button.className = "button quiet";
     button.textContent = item.id === state.active_model_id ? "Active" : "Switch";
-    button.disabled = item.id === state.active_model_id;
+    const rateLimited = availability === "rate limited (429)";
+    button.disabled = item.id === state.active_model_id || rateLimited;
+    if (rateLimited) button.title = "The provider answered 429 Too Many Requests. This model is not available right now.";
     button.addEventListener("click", () => switchModel(item));
     actionCell.append(button);
-    row.append(modelCell, providerCell, routeCell, statusCell, actionCell);
+    row.append(modelCell, providerCell, routeCell, availabilityCell, statusCell, actionCell);
     rows.append(row);
   }
 }
@@ -142,8 +177,20 @@ function render() {
 
 async function load() {
   state = await api("/api/state");
-  lane = state.active_lane === "paid" ? "paid" : "free";
+  // Keep the lane that the user is viewing. Only the first load follows the
+  // configured active lane, so a refresh never jumps back to the other tab.
+  lane = lane || (state.active_lane === "paid" ? "paid" : "free");
   render();
+}
+
+async function checkAvailability() {
+  if (!window.confirm("Check availability now? The daemon sends one tiny request to your provider.")) return;
+  showBanner("Checking model availability...");
+  try {
+    await api("/api/check", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+    await load();
+    showBanner("Availability updated. A 429 result means the model is rate limited right now.", "ok");
+  } catch (error) { showBanner(error.message, "error"); }
 }
 
 async function saveConfig(config, message) {
@@ -235,6 +282,7 @@ async function switchModel(item) {
 
 document.querySelectorAll(".lane").forEach((button) => button.addEventListener("click", () => { lane = button.dataset.lane; render(); }));
 $("refresh").addEventListener("click", () => load().catch((error) => showBanner(error.message, "error")));
+$("check-availability").addEventListener("click", () => checkAvailability());
 $("add-provider").addEventListener("click", addProvider);
 $("add-model").addEventListener("click", addModel);
 $("connect-key").addEventListener("click", connectKey);
@@ -246,3 +294,9 @@ $("key-provider").addEventListener("change", () => {
   $("provider-status").textContent = provider.connected ? `Connected through ${provider.key_source}.` : "Not connected. No approved key scan has found a key.";
 });
 load().catch((error) => showBanner(error.message, "error"));
+
+// Poll quietly so availability and the active model stay current after real
+// runs. Hidden tabs skip the poll, and failures stay silent.
+setInterval(() => {
+  if (!document.hidden) load().catch(() => {});
+}, 10000);

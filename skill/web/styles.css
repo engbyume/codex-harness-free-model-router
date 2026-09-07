@@ -46,6 +46,9 @@ td.provider, td.route { color: var(--muted); font-size: 12px; }
 .status-ready { color: var(--ok); }
 .status-warn { color: var(--accent); }
 .status-off { color: var(--muted); }
+.avail-ok { color: var(--ok); }
+.avail-bad { color: var(--bad); }
+.avail-unknown { color: var(--muted); }
 .button { border: 1px solid var(--border); padding: 7px 13px; color: var(--text); background: var(--surface-2); }
 .button:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
 .button.primary { background: var(--accent); border-color: var(--accent); color: #1b1110; font-weight: 650; }

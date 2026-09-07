@@ -32,12 +32,15 @@
           <h2 id="model-heading">Free models</h2>
           <p id="model-caption">Add the models that you want to use. The list starts empty.</p>
         </div>
-        <button class="button quiet" id="refresh">Refresh</button>
+        <div class="button-row">
+          <button class="button quiet" id="refresh">Refresh</button>
+          <button class="button quiet" id="check-availability">Check availability</button>
+        </div>
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Model</th><th>Provider</th><th>Route</th><th>Status</th><th></th></tr></thead>
-          <tbody id="model-rows"><tr><td colspan="5">Loading models...</td></tr></tbody>
+          <thead><tr><th>Model</th><th>Provider</th><th>Route</th><th>Availability</th><th>Status</th><th></th></tr></thead>
+          <tbody id="model-rows"><tr><td colspan="6">Loading models...</td></tr></tbody>
         </table>
       </div>
     </section>

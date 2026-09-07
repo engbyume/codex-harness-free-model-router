@@ -8,6 +8,7 @@ import json
 import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -16,11 +17,85 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from router_config import load_config, model_for, provider_for  # noqa: E402
+from router_config import load_config, model_for, provider_for, status_path  # noqa: E402
 
 
 MAX_BODY_BYTES = 2 * 1024 * 1024
 DAEMON = None
+
+# Availability tracking. After every real request and probe the daemon records
+# the actual upstream outcome for its model and persists it, so the local panel
+# can show whether the model actually works right now. A 429 means the model is
+# rate limited and therefore not available.
+PROBE_TTL_SECONDS = 120.0
+# Some providers reject a max-token cap below 16 on small requests with a 400
+# invalid_request_error, which would make a healthy model look broken. A cap
+# of 32 stays above that floor and costs only a few tokens per probe.
+PROBE_MAX_TOKENS = 32
+
+_model_status: dict[str, dict] = {}
+
+
+def load_status() -> None:
+    try:
+        data = json.loads(status_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    entries = data.get("models") if isinstance(data, dict) else None
+    if isinstance(entries, dict):
+        for key, value in entries.items():
+            if isinstance(value, dict):
+                _model_status[key] = value
+
+
+def save_status() -> None:
+    try:
+        path = status_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.tmp")
+        temporary.write_text(
+            json.dumps({"version": 1, "models": _model_status}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+    except OSError:
+        return
+
+
+def record_status(model_id: str, status: str, source: str, detail: str = "") -> None:
+    """status is one of ok, rate_limited, error, unknown."""
+    _model_status[model_id] = {
+        "status": status,
+        "at": time.time(),
+        "source": source,
+        "detail": detail[:200],
+    }
+    save_status()
+
+
+def classify_outcome(code: int, detail: str) -> str:
+    lowered = detail.lower()
+    if code == 429 or "rate limit" in lowered or "ratelimit" in lowered or "usage limit" in lowered or "usagelimit" in lowered:
+        return "rate_limited"
+    # Request-shape problems (for example a rejected parameter) and auth or
+    # permission failures do not prove that a model is down. Mark them
+    # unknown so an available model is never shown as an error.
+    if code in (400, 401, 403) and (
+        "invalid_request_error" in detail
+        or "invalid request" in lowered
+        or "authentication" in lowered
+        or "api key" in lowered
+        or "permission" in lowered
+    ):
+        return "unknown"
+    return "error"
+
+
+def outcome_from_response(status: int, data: bytes) -> tuple[str, str]:
+    if status < 400:
+        return "ok", ""
+    detail = data.decode("utf-8", errors="replace")
+    return classify_outcome(status, detail), detail
 
 
 def result_json(payload: dict, status: int = 200) -> tuple[int, dict, bytes]:
@@ -44,36 +119,95 @@ def content_text(value: object) -> str:
     return ""
 
 
-def responses_to_chat(payload: dict) -> dict:
+def responses_input_to_messages(payload: dict) -> list[dict]:
+    """Convert Responses input items into chat completions messages.
+
+    Function calls and their outputs keep their structure, so multi-turn tool
+    conversations survive the translation for chat-only providers.
+    """
     messages = []
     instructions = payload.get("instructions")
     if isinstance(instructions, str) and instructions:
         messages.append({"role": "system", "content": instructions})
     source = payload.get("input", "")
-    if isinstance(source, str):
-        messages.append({"role": "user", "content": source})
-    elif isinstance(source, list):
-        pending = []
-        for item in source:
-            if isinstance(item, dict) and item.get("role") in {"system", "user", "assistant", "tool"}:
-                if pending:
-                    messages.append({"role": "user", "content": "".join(pending)})
-                    pending = []
-                messages.append({"role": item["role"], "content": content_text(item.get("content", ""))})
-            elif isinstance(item, dict):
-                pending.append(content_text(item.get("text") or item.get("content") or ""))
-        if pending:
-            messages.append({"role": "user", "content": "".join(pending)})
+    items = source if isinstance(source, list) else [{"type": "message", "role": "user", "content": source}]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if item_type == "function_call":
+            arguments = item.get("arguments", "")
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": item.get("call_id") or item.get("id") or "",
+                            "type": "function",
+                            "function": {
+                                "name": item.get("name", ""),
+                                "arguments": arguments if isinstance(arguments, str) else json.dumps(arguments),
+                            },
+                        }
+                    ],
+                }
+            )
+        elif item_type == "function_call_output":
+            output = item.get("output")
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": item.get("call_id") or "",
+                    "content": output if isinstance(output, str) else json.dumps(output),
+                }
+            )
+        elif item.get("role") in {"system", "user", "assistant", "tool", "developer"}:
+            role = "system" if item.get("role") == "developer" else item["role"]
+            messages.append({"role": role, "content": content_text(item.get("content", ""))})
+        else:
+            text = content_text(item.get("text") or item.get("content") or "")
+            if text:
+                messages.append({"role": "user", "content": text})
     if not messages:
         messages.append({"role": "user", "content": ""})
-    output = {"model": payload.get("model"), "messages": messages, "stream": False}
-    if payload.get("max_output_tokens") is not None:
-        output["max_tokens"] = payload["max_output_tokens"]
-    if isinstance(payload.get("tools"), list):
-        output["tools"] = payload["tools"]
-    if payload.get("tool_choice") is not None:
-        output["tool_choice"] = payload["tool_choice"]
-    return output
+    return messages
+
+
+def responses_to_chat(payload: dict) -> dict:
+    chat = {
+        "model": payload.get("model"),
+        "messages": responses_input_to_messages(payload),
+        "stream": False,
+    }
+    tools = payload.get("tools")
+    if isinstance(tools, list):
+        # Built-in tools (for example {"type": "web_search"}) have no name or
+        # parameters and cannot be expressed in the chat completions API.
+        # Forwarding them makes some providers reject the whole request with a
+        # 400, so only function tools cross the bridge.
+        function_tools = []
+        for tool in tools:
+            if not isinstance(tool, dict) or tool.get("type") != "function":
+                continue
+            function = {"name": tool.get("name", ""), "parameters": tool.get("parameters", {"type": "object"})}
+            if isinstance(tool.get("description"), str):
+                function["description"] = tool["description"]
+            function_tools.append({"type": "function", "function": function})
+        if function_tools:
+            chat["tools"] = function_tools
+            tool_choice = payload.get("tool_choice")
+            if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+                chat["tool_choice"] = {"type": "function", "function": {"name": tool_choice.get("name", "")}}
+            elif isinstance(tool_choice, str):
+                chat["tool_choice"] = tool_choice
+    max_output = payload.get("max_output_tokens")
+    if isinstance(max_output, (int, float)) and max_output > 0:
+        chat["max_tokens"] = int(max_output)
+    temperature = payload.get("temperature")
+    if isinstance(temperature, (int, float)):
+        chat["temperature"] = temperature
+    return chat
 
 
 def chat_to_responses(payload: dict, model_id: str) -> dict:
@@ -101,6 +235,7 @@ def chat_to_responses(payload: dict, model_id: str) -> dict:
                 "call_id": call.get("id", "call_router"),
                 "name": function.get("name", ""),
                 "arguments": function.get("arguments", "{}"),
+                "status": "completed",
             }
         )
     return {
@@ -150,6 +285,52 @@ class RouterDaemon:
         except urllib.error.URLError as error:
             return result_json({"error": f"provider connection failed: {error.reason}"}, 502)
 
+    def record(self, status: int, data: bytes, source: str) -> None:
+        outcome, detail = outcome_from_response(status, data)
+        record_status(self.model["id"], outcome, source, detail)
+
+    def probe(self, timeout: int = 30) -> str:
+        """Send one tiny upstream request to check whether the model answers now.
+
+        Rate-limited models usually reject without consuming quota; a healthy
+        model spends only a few tokens. The caller throttles probes with
+        PROBE_TTL_SECONDS so repeated checks stay cheap.
+        """
+        if self.provider["wire_api"] == "chat":
+            endpoint = "chat/completions"
+            body = {
+                "model": self.model["id"],
+                "messages": [{"role": "user", "content": "ok"}],
+                "max_tokens": PROBE_MAX_TOKENS,
+                "stream": False,
+            }
+        else:
+            endpoint = "responses"
+            body = {
+                "model": self.model["id"],
+                "input": "ok",
+                "max_output_tokens": PROBE_MAX_TOKENS,
+                "stream": False,
+            }
+        status, _headers, data = self.forward(endpoint, body)
+        outcome, detail = outcome_from_response(status, data)
+        record_status(self.model["id"], outcome, "probe", detail)
+        return outcome
+
+    def status_payload(self) -> dict:
+        entry = _model_status.get(self.model["id"], {})
+        now = time.time()
+        return {
+            "models": {
+                self.model["id"]: {
+                    "status": entry.get("status", "unknown"),
+                    "at": entry.get("at"),
+                    "source": entry.get("source"),
+                    "age_seconds": round(now - (entry.get("at") or now), 1),
+                }
+            }
+        }
+
     def handle(self, endpoint: str, payload: dict) -> tuple[int, dict, bytes]:
         requested = payload.get("model") or self.model["id"]
         if requested != self.model["id"]:
@@ -158,6 +339,7 @@ class RouterDaemon:
         payload["model"] = self.model["id"]
         if endpoint == "responses" and self.provider["wire_api"] == "chat":
             status, headers, data = self.forward("chat/completions", responses_to_chat(payload))
+            self.record(status, data, "request")
             if status >= 400:
                 return status, headers, data
             try:
@@ -166,7 +348,9 @@ class RouterDaemon:
                 return result_json({"error": "provider returned invalid JSON"}, 502)
         if endpoint == "chat/completions" and self.provider["wire_api"] == "responses":
             return result_json({"error": "this provider is configured for the responses API"}, 400)
-        return self.forward(endpoint, payload)
+        status, headers, data = self.forward(endpoint, payload)
+        self.record(status, data, "request")
+        return status, headers, data
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -192,6 +376,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/v1/models" and DAEMON:
             self.send_result(result_json({"object": "list", "data": DAEMON.models()}))
+            return
+        if self.path.startswith("/v1/status") and DAEMON:
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            if query.get("probe", ["0"])[0] == "1":
+                last = _model_status.get(DAEMON.model["id"], {}).get("at", 0.0)
+                if time.time() - last > PROBE_TTL_SECONDS:
+                    DAEMON.probe()
+            self.send_result(result_json(DAEMON.status_payload()))
             return
         self.send_result(result_json({"error": "not_found"}, 404))
 
@@ -236,6 +428,7 @@ def main() -> int:
         DAEMON = RouterDaemon(config, provider_id, model_id)
     except ValueError as error:
         parser.error(str(error))
+    load_status()
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     print(f"Free model router daemon listening on http://127.0.0.1:{port}", flush=True)
     server.serve_forever()

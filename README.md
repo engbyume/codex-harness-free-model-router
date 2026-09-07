@@ -16,6 +16,7 @@ Everything is customizable.
 | Providers | Add any provider with an OpenAI-compatible endpoint. |
 | Models | Add every model ID and friendly name yourself. |
 | Lanes | Mark each model as `free` or `paid`. |
+| Availability | The panel shows whether each free model answers right now. |
 | Fallback | Set the Default Fallback Rules for your own usage limits. |
 | Credentials | Enter a key for one run or name an approved environment variable. |
 | Codex route | Write a local profile that points the harness to your selected route. |
@@ -105,8 +106,46 @@ The panel lets you:
 4. Scan only configured key variable names after a confirmation step.
 5. Change the Default Fallback Rules.
 6. Switch the active model and write a Codex profile.
+7. Check whether each free model answers right now.
 
 The panel never scans the environment on page load. It never displays a key.
+The lane that you are viewing stays selected across refreshes.
+
+## Check model availability
+
+A model can be configured and still be unusable. Free tiers return `429 Too
+Many Requests` when a usage window is spent, and a switch onto that model
+fails until the window resets.
+
+The daemon records the real upstream outcome for its model after every
+request and every probe. The panel reads those outcomes and shows them in the
+Availability column:
+
+| Status | Meaning |
+| --- | --- |
+| `available` | The last request or probe reached the model. |
+| `rate limited (429)` | The provider answered 429. The panel disables Switch for that model. |
+| `error` | The provider answered with another failure. |
+| `unknown` | A request-shape or credential problem, which does not prove the model is down. |
+| `not checked` | The daemon has not talked to that model yet. |
+
+Use the **Check availability** button for a live check. The daemon sends one
+tiny request (a cap of 32 output tokens, because some providers reject caps
+below 16) and records the result. Checks are throttled to one probe per model
+every 2 minutes, so repeated clicks stay cheap. The page also refreshes
+quietly every 10 seconds, so a model that starts returning 429 during real
+work shows as rate limited without a manual refresh.
+
+You can read or probe the same data from the command line:
+
+```bash
+curl http://127.0.0.1:4242/v1/status
+curl "http://127.0.0.1:4242/v1/status?probe=1"
+```
+
+Outcomes persist in `status.json` next to your configuration file, or where
+ever `MODEL_ROUTER_STATUS_PATH` points. The panel never reports a route as
+usable while its model is rate limited.
 
 ## Add a provider and model
 
@@ -200,6 +239,7 @@ Completions API. Tool and document support depends on the provider and model.
 | Setting | Starting value | Customization |
 | --- | --- | --- |
 | Configuration file | `~/.config/free-model-router/config.json` | Set `MODEL_ROUTER_CONFIG`. |
+| Availability file | `~/.config/free-model-router/status.json` | Set `MODEL_ROUTER_STATUS_PATH`. |
 | Panel port | `8791` | Set `MODEL_ROUTER_PANEL_PORT`. |
 | Daemon port | `4242` | Set `MODEL_ROUTER_DAEMON_PORT` or edit the config. |
 | Profile name | `free-model-router` | Edit `app.profile_name`. |
@@ -259,6 +299,20 @@ model.
 
 Use a current explicit user override only when you accept the remaining usage
 risk. Change the Default Fallback Rules if your policy is different.
+
+### A model shows rate limited (429)
+
+The provider's usage window for that model is spent. Wait for the reset or
+add another free model on a separate quota. The panel keeps Switch disabled
+for a rate-limited model, because a switch onto it fails until the window
+resets.
+
+### A model shows error or unknown
+
+`error` means the last request or probe failed for another reason. `unknown`
+means the provider rejected the request shape or the credential, which does
+not prove the model is down. Run **Check availability** again after fixing
+the provider URL, key, or model ID.
 
 ### A paid model appears in the free lane
 
