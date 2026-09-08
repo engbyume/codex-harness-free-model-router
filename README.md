@@ -131,10 +131,12 @@ Availability column:
 
 Use the **Check availability** button for a live check. The daemon sends one
 tiny request (a cap of 32 output tokens, because some providers reject caps
-below 16) and records the result. Checks are throttled to one probe per model
-every 2 minutes, so repeated clicks stay cheap. The page also refreshes
-quietly every 10 seconds, so a model that starts returning 429 during real
-work shows as rate limited without a manual refresh.
+below 16) and records the result. Reasoning models can spend 30 or more
+seconds thinking before they answer, so a live check can take up to 90
+seconds per model. Checks are throttled to one probe per model every 2
+minutes, so repeated clicks stay cheap. The page also refreshes quietly every
+10 seconds, so a model that starts returning 429 during real work shows as
+rate limited without a manual refresh.
 
 You can read or probe the same data from the command line:
 
@@ -159,6 +161,16 @@ Each provider needs:
 - an `http` or `https` base URL;
 - an optional uppercase environment variable name for its key; and
 - `responses` or `chat` as its API style.
+
+A provider can also carry two optional header settings. Some providers reject
+requests that do not carry client-style headers, for example a session or
+request identifier in a specific format:
+
+- `headers`: static headers sent with every request, for example `{"User-Agent": "my-client/1.0"}`; and
+- `dynamic_headers`: per-request headers whose values use a `{randomN}` template, for example `{"x-session": "{random24}"}` expands to a fresh 24-character identifier on every request.
+
+Set these only if your provider documents or requires them. The package does
+not add headers on its own.
 
 Each model needs:
 

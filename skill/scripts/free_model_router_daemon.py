@@ -6,6 +6,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
+import re
+import string
 import time
 import urllib.error
 import urllib.parse
@@ -22,6 +25,16 @@ from router_config import load_config, model_for, provider_for, status_path  # n
 
 MAX_BODY_BYTES = 2 * 1024 * 1024
 DAEMON = None
+
+
+def dynamic_header_values(templates: dict) -> dict:
+    """Expand {randomN} header value templates into fresh per-request values."""
+    values = {}
+    for name, template in templates.items():
+        match = re.fullmatch(r"\{random(\d{1,3})\}", template or "")
+        length = min(int(match.group(1)), 128) if match else 24
+        values[name] = "".join(random.choices(string.ascii_letters + string.digits, k=length))
+    return values
 
 # Availability tracking. After every real request and probe the daemon records
 # the actual upstream outcome for its model and persists it, so the local panel
@@ -271,6 +284,8 @@ class RouterDaemon:
         headers = {"Content-Type": "application/json"}
         if key:
             headers["Authorization"] = f"Bearer {key}"
+        headers.update(self.provider.get("headers") or {})
+        headers.update(dynamic_header_values(self.provider.get("dynamic_headers") or {}))
         request = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=180) as response:
@@ -289,12 +304,14 @@ class RouterDaemon:
         outcome, detail = outcome_from_response(status, data)
         record_status(self.model["id"], outcome, source, detail)
 
-    def probe(self, timeout: int = 30) -> str:
+    def probe(self, timeout: int = 90) -> str:
         """Send one tiny upstream request to check whether the model answers now.
 
         Rate-limited models usually reject without consuming quota; a healthy
-        model spends only a few tokens. The caller throttles probes with
-        PROBE_TTL_SECONDS so repeated checks stay cheap.
+        model spends only a few tokens. Reasoning models can spend 30 or more
+        seconds thinking before they answer, so the timeout stays generous.
+        The caller throttles probes with PROBE_TTL_SECONDS so repeated checks
+        stay cheap.
         """
         if self.provider["wire_api"] == "chat":
             endpoint = "chat/completions"

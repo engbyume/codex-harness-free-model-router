@@ -278,7 +278,7 @@ class Handler(BaseHTTPRequestHandler):
             with STATE.lock:
                 url = daemon_probe_url(STATE.config)
             try:
-                with urllib.request.urlopen(url, timeout=60) as response:
+                with urllib.request.urlopen(url, timeout=120) as response:
                     result = json.loads(response.read().decode("utf-8"))
             except (urllib.error.URLError, OSError, ValueError) as error:
                 raise ValueError(f"the daemon did not answer: {error}") from error

@@ -121,6 +121,36 @@ def _url(value: object, label: str) -> str:
     return value.rstrip("/")
 
 
+def _headers(value: object, label: str) -> dict:
+    """Optional static request headers for a provider."""
+    if value in (None, ""):
+        return {}
+    if not isinstance(value, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in value.items()):
+        raise ValueError(f"{label} must map header names to string values")
+    if len(value) > 20:
+        raise ValueError(f"{label} accepts at most 20 headers")
+    return {str(k)[:200]: str(v)[:2048] for k, v in value.items()}
+
+
+def _dynamic_headers(value: object, label: str) -> dict:
+    """Optional per-request headers with {randomN} templates in their values.
+
+    Some providers reject requests that do not carry client-style request IDs.
+    A value like "ses_{random24}" expands to a fresh identifier on every
+    request, so repeated calls do not reuse one static value.
+    """
+    if value in (None, ""):
+        return {}
+    if not isinstance(value, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in value.items()):
+        raise ValueError(f"{label} must map header names to string values")
+    if len(value) > 20:
+        raise ValueError(f"{label} accepts at most 20 headers")
+    for name, template in value.items():
+        if not re.fullmatch(r"\{random(\d{1,3})\}", template or ""):
+            raise ValueError(f"{label} value for {name} must look like {{random24}}")
+    return {str(k)[:200]: str(v)[:100] for k, v in value.items()}
+
+
 def validate_config(config: dict) -> dict:
     output = default_config()
     providers = config.get("providers", [])
@@ -140,6 +170,8 @@ def validate_config(config: dict) -> dict:
                 "base_url": _url(raw.get("base_url"), "provider base URL"),
                 "api_key_env": _env(raw.get("api_key_env", ""), "provider key name"),
                 "wire_api": raw.get("wire_api", "responses") if raw.get("wire_api", "responses") in {"responses", "chat"} else "responses",
+                "headers": _headers(raw.get("headers"), "provider headers"),
+                "dynamic_headers": _dynamic_headers(raw.get("dynamic_headers"), "provider dynamic headers"),
             }
         )
     model_ids = set()
